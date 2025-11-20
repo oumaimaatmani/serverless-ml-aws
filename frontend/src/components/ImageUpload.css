@@ -1,0 +1,135 @@
+.upload-container {
+  max-width: 600px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.upload-container h2 {
+  margin-bottom: 1.5rem;
+  font-size: 1.8rem;
+}
+
+.upload-area {
+  background: rgba(255, 255, 255, 0.05);
+  border: 2px dashed #646cff;
+  border-radius: 12px;
+  padding: 2rem;
+  margin-bottom: 2rem;
+}
+
+.file-input {
+  display: none;
+}
+
+.file-label {
+  display: block;
+  padding: 1rem 2rem;
+  background: #646cff;
+  color: white;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.3s;
+  margin-bottom: 1rem;
+}
+
+.file-label:hover {
+  background: #535bf2;
+}
+
+.preview-container {
+  margin: 1.5rem 0;
+}
+
+.preview-image {
+  max-width: 100%;
+  max-height: 300px;
+  border-radius: 8px;
+  object-fit: contain;
+}
+
+.upload-button {
+  width: 100%;
+  padding: 1rem 2rem;
+  font-size: 1.1rem;
+  background: #42b883;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.3s;
+}
+
+.upload-button:hover:not(:disabled) {
+  background: #33a06f;
+}
+
+.upload-button:disabled {
+  background: #666;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.status-message {
+  margin-top: 1rem;
+  padding: 1rem;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.status-message.success {
+  background: rgba(66, 184, 131, 0.2);
+  color: #42b883;
+}
+
+.status-message.error {
+  background: rgba(255, 68, 68, 0.2);
+  color: #ff4444;
+}
+
+.info-box {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 1.5rem;
+  text-align: left;
+}
+
+.info-box h3 {
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+  font-size: 1.2rem;
+  color: #646cff;
+}
+
+.info-box p {
+  margin: 0.5rem 0;
+  color: #888;
+}
+
+.info-box ul {
+  margin: 0.5rem 0;
+  padding-left: 1.5rem;
+}
+
+.info-box li {
+  margin: 0.3rem 0;
+  color: #888;
+}
+
+@media (prefers-color-scheme: light) {
+  .upload-area {
+    background: rgba(0, 0, 0, 0.02);
+  }
+
+  .info-box {
+    background: rgba(0, 0, 0, 0.02);
+  }
+
+  .status-message.success {
+    background: rgba(66, 184, 131, 0.1);
+  }
+
+  .status-message.error {
+    background: rgba(255, 68, 68, 0.1);
+  }
+}
