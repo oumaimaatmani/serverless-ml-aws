@@ -2,59 +2,61 @@ name: CI
 
 on:
   push:
-    branches: [master, refactor/structure]
+    branches: [main, master]
   pull_request:
-    branches: [master]
+    branches: [main, master]
 
 jobs:
   validate:
-    runs-on: 
-    
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
-      
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.5.0
-      
-      - name: Terraform Format Check
+
+      - name: Terraform Format
         working-directory: terraform
         run: terraform fmt -check -recursive
-      
+
       - name: Terraform Init
         working-directory: terraform
         run: terraform init -backend=false
-      
+
       - name: Terraform Validate
         working-directory: terraform
         run: terraform validate
-      
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      
-      - name: Install Python dependencies
-        run: |
-          pip install ruff pytest boto3
-      
-      - name: Python Lint
-        run: ruff check backend || true
-      
+          python-version: "3.11"
+
+      - name: Install Python deps
+        run: pip install ruff pytest boto3 moto
+
+      - name: Lint Python
+        run: ruff check backend
+
       - name: Python Tests
-        run: pytest || echo "No tests configured yet"
-      
+        run: pytest || echo "No tests yet"
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
-      
-      - name: Install Frontend dependencies
+          node-version: "18"
+
+      - name: Install Frontend deps
         working-directory: frontend
         run: npm ci
-      
-      - name: Frontend Build
+
+      - name: Build Frontend
         working-directory: frontend
         run: npm run build

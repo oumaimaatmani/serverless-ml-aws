@@ -1,228 +1,169 @@
 """
-Lambda Function: Image Processor
-Rôle: Valide et prépare les images pour le traitement ML
+Lambda: Image Processor
+Purpose: Validate an uploaded image object and prepare normalized metadata for downstream ML analysis.
 """
-
 import json
 import os
 import logging
-import boto3
-from datetime import datetime
+import re
 import hashlib
+from datetime import datetime
 from typing import Dict, Any
 
-# Configuration du logging
+import boto3
+
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 logger = logging.getLogger()
-logger.setLevel(os.environ.get('LOG_LEVEL', 'INFO'))
+logger.setLevel(LOG_LEVEL)
 
-# Clients AWS
-s3_client = boto3.client('s3')
+s3_client = boto3.client("s3")
 
-# Configuration
-IMAGES_BUCKET = os.environ.get('IMAGES_BUCKET')
-MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
-ALLOWED_FORMATS = ['.jpg', '.jpeg', '.png', '.gif', '.bmp']
+MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
+UUID_REGEX = re.compile(r"([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})")
 
 
 class ValidationError(Exception):
-    """Exception personnalisée pour erreurs de validation"""
+    """Raised when image validation fails."""
     pass
 
 
-def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+def lambda_handler(event: Dict[str, Any], _context: Any) -> Dict[str, Any]:
     """
-    Handler principal de la fonction Lambda
-    
-    Args:
-        event: Événement d'entrée contenant les informations de l'image
-        context: Contexte d'exécution Lambda
-        
-    Returns:
-        Dict contenant les informations validées de l'image
-        
-    Raises:
-        ValidationError: Si l'image ne passe pas la validation
+    Entry point.
+    Supports Step Functions input format or raw S3 event records.
+    Returns normalized image metadata or raises ValidationError.
     """
-    logger.info(f"Démarrage du traitement - Event: {json.dumps(event)}")
-    
+    logger.info("stage=start handler=ImageProcessor")
     try:
-        # Extraction des informations de l'image
-        image_info = extract_image_info(event)
-        logger.info(f"Image détectée: {image_info['key']}")
-        
-        # Validation de l'image
-        validate_image(image_info)
-        logger.info("Image validée avec succès")
-        
-        # Génération d'un ID unique pour l'image
-        image_id = generate_image_id(image_info)
-        
-        # Récupération des métadonnées S3
-        metadata = get_s3_metadata(image_info['bucket'], image_info['key'])
-        
-        # Préparation de la réponse
+        image = extract_image_info(event)
+        logger.info("detected key=%s bucket=%s", image["key"], image["bucket"])
+
+        validate_image(image)
+
+        image_id = derive_image_id(image["key"])
+        metadata = fetch_s3_head(image["bucket"], image["key"])
+
         result = {
-            'image_id': image_id,
-            'bucket': image_info['bucket'],
-            'key': image_info['key'],
-            'size': image_info['size'],
-            'format': image_info['format'],
-            'upload_time': image_info.get('upload_time', datetime.utcnow().isoformat()),
-            'metadata': metadata,
-            'validation_status': 'PASSED',
-            'processor_timestamp': datetime.utcnow().isoformat(),
-            'user_id': extract_user_id(image_info['key'])
+            "image_id": image_id,
+            "bucket": image["bucket"],
+            "key": image["key"],
+            "size": image["size"],
+            "format": image["format"],
+            "upload_time": image.get("upload_time", datetime.utcnow().isoformat()),
+            "metadata": metadata,
+            "validation_status": "PASSED",
+            "processor_timestamp": datetime.utcnow().isoformat(),
+            "user_id": extract_user_id(image["key"]),
         }
-        
-        logger.info(f"Traitement réussi pour image_id: {image_id}")
+
+        logger.info("stage=complete image_id=%s size=%s format=%s",
+                    image_id, image["size"], image["format"])
         return result
-        
-    except ValidationError as e:
-        logger.error(f"Erreur de validation: {str(e)}")
-        raise ValidationError(f"Image validation failed: {str(e)}")
-        
-    except Exception as e:
-        logger.error(f"Erreur inattendue: {str(e)}", exc_info=True)
+    except ValidationError as ve:
+        logger.warning("validation_failed reason=%s", str(ve))
         raise
+    except Exception as e:
+        logger.exception("unexpected_error")
+        raise ValidationError(f"Unhandled processing error: {str(e)}") from e
 
 
-def extract_image_info(event: Dict[str, Any]) -> Dict[str, str]:
+def extract_image_info(event: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Extrait les informations de l'image depuis l'événement
-    
-    Args:
-        event: Événement d'entrée
-        
-    Returns:
-        Dict contenant les informations de l'image
+    Normalize incoming event to a unified image descriptor.
+    Supports:
+      - Step Functions pass-through: {image_bucket, image_key, image_size, upload_time}
+      - S3 event: Records[0].s3.*
     """
-    # Support de différents formats d'événement
-    if 'image_bucket' in event and 'image_key' in event:
-        # Format Step Functions
+    if "image_bucket" in event and "image_key" in event:
         return {
-            'bucket': event['image_bucket'],
-            'key': event['image_key'],
-            'size': event.get('image_size', 0),
-            'upload_time': event.get('upload_time'),
-            'format': os.path.splitext(event['image_key'])[1].lower()
+            "bucket": event["image_bucket"],
+            "key": event["image_key"],
+            "size": event.get("image_size", 0),
+            "upload_time": event.get("upload_time"),
+            "format": _extension(event["image_key"]),
         }
-    elif 'Records' in event:
-        # Format S3 Event
-        record = event['Records'][0]
-        s3_info = record['s3']
+
+    if "Records" in event:
+        record = event["Records"][0]
+        s3obj = record["s3"]["object"]
         return {
-            'bucket': s3_info['bucket']['name'],
-            'key': s3_info['object']['key'],
-            'size': s3_info['object']['size'],
-            'upload_time': record['eventTime'],
-            'format': os.path.splitext(s3_info['object']['key'])[1].lower()
+            "bucket": record["s3"]["bucket"]["name"],
+            "key": s3obj["key"],
+            "size": s3obj.get("size", 0),
+            "upload_time": record.get("eventTime"),
+            "format": _extension(s3obj["key"]),
         }
-    else:
-        raise ValidationError("Format d'événement non reconnu")
+
+    raise ValidationError("Unsupported event structure")
 
 
-def validate_image(image_info: Dict[str, str]) -> None:
+def validate_image(image: Dict[str, Any]) -> None:
     """
-    Valide l'image selon plusieurs critères
-    
-    Args:
-        image_info: Informations de l'image à valider
-        
-    Raises:
-        ValidationError: Si la validation échoue
+    Ensure image meets format and size constraints and exists in S3.
     """
-    # Vérification du format
-    if image_info['format'] not in ALLOWED_FORMATS:
+    ext = image["format"]
+    if ext not in ALLOWED_EXTENSIONS:
+        raise ValidationError(f"Unsupported format {ext}. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}")
+
+    size = int(image.get("size", 0))
+    if size <= 0:
+        raise ValidationError("Empty file (0 bytes)")
+    if size > MAX_IMAGE_SIZE_BYTES:
         raise ValidationError(
-            f"Format non supporté: {image_info['format']}. "
-            f"Formats acceptés: {', '.join(ALLOWED_FORMATS)}"
+            f"File too large: {size / (1024*1024):.2f} MB (max {MAX_IMAGE_SIZE_BYTES / (1024*1024):.2f} MB)"
         )
-    
-    # Vérification de la taille
-    size = int(image_info['size'])
-    if size == 0:
-        raise ValidationError("L'image est vide (0 bytes)")
-    
-    if size > MAX_IMAGE_SIZE:
-        raise ValidationError(
-            f"Image trop volumineuse: {size / 1024 / 1024:.2f} MB. "
-            f"Taille maximale: {MAX_IMAGE_SIZE / 1024 / 1024} MB"
-        )
-    
-    # Vérification que le fichier existe dans S3
+
     try:
-        s3_client.head_object(
-            Bucket=image_info['bucket'],
-            Key=image_info['key']
-        )
+        s3_client.head_object(Bucket=image["bucket"], Key=image["key"])
     except s3_client.exceptions.NoSuchKey:
-        raise ValidationError(f"Image introuvable: {image_info['key']}")
+        raise ValidationError(f"Object not found: {image['key']}")
     except Exception as e:
-        raise ValidationError(f"Erreur lors de l'accès à l'image: {str(e)}")
-    
-    logger.info(f"Validation réussie - Format: {image_info['format']}, Taille: {size} bytes")
+        raise ValidationError(f"S3 access error: {str(e)}")
+
+    logger.info("validation_passed format=%s size=%d", ext, size)
 
 
-def generate_image_id(image_info: Dict[str, str]) -> str:
+def derive_image_id(key: str) -> str:
     """
-    Génère un ID unique pour l'image
-    
-    Args:
-        image_info: Informations de l'image
-        
-    Returns:
-        ID unique (hash SHA256)
+    Extract UUID from key if present; otherwise derive a deterministic short hash fallback.
     """
-    # Création d'une chaîne unique combinant bucket, key et timestamp
-    unique_string = f"{image_info['bucket']}/{image_info['key']}/{datetime.utcnow().isoformat()}"
-    
-    # Génération du hash SHA256
-    image_id = hashlib.sha256(unique_string.encode()).hexdigest()[:16]
-    
-    return image_id
+    match = UUID_REGEX.search(key)
+    if match:
+        return match.group(1)
+
+    logger.debug("uuid_missing key=%s generating_hash_fallback", key)
+    base = f"{key}-{datetime.utcnow().isoformat()}"
+    return hashlib.sha256(base.encode()).hexdigest()[:16]
 
 
-def get_s3_metadata(bucket: str, key: str) -> Dict[str, Any]:
+def fetch_s3_head(bucket: str, key: str) -> Dict[str, Any]:
     """
-    Récupère les métadonnées S3 de l'image
-    
-    Args:
-        bucket: Nom du bucket S3
-        key: Clé de l'objet S3
-        
-    Returns:
-        Dict contenant les métadonnées
+    Retrieve basic S3 object metadata. Non-critical failures return {}.
     """
     try:
-        response = s3_client.head_object(Bucket=bucket, Key=key)
-        
+        resp = s3_client.head_object(Bucket=bucket, Key=key)
+        lm = resp.get("LastModified")
         return {
-            'content_type': response.get('ContentType', 'unknown'),
-            'last_modified': response.get('LastModified', '').isoformat() if response.get('LastModified') else None,
-            'etag': response.get('ETag', '').strip('"'),
-            'metadata': response.get('Metadata', {})
+            "content_type": resp.get("ContentType"),
+            "etag": (resp.get("ETag") or "").strip('"'),
+            "last_modified": lm.isoformat() if lm else None,
+            "metadata": resp.get("Metadata", {}),
         }
     except Exception as e:
-        logger.warning(f"Impossible de récupérer les métadonnées: {str(e)}")
+        logger.warning("metadata_fetch_failed key=%s error=%s", key, str(e))
         return {}
 
 
 def extract_user_id(key: str) -> str:
     """
-    Extrait l'ID utilisateur depuis le chemin de l'image
-    Format attendu: uploads/user123/image.jpg
-    
-    Args:
-        key: Clé S3 de l'image
-        
-    Returns:
-        ID utilisateur ou 'unknown'
+    Extract user identifier from key pattern uploads/<user>/...
     """
-    try:
-        parts = key.split('/')
-        if len(parts) >= 2 and parts[0] == 'uploads':
-            return parts[1]
-    except Exception as e:
-        logger.warning(f"Impossible d'extraire user_id: {str(e)}")
-    
-    return 'unknown'
+    parts = key.split("/")
+    if len(parts) >= 2 and parts[0] == "uploads" and parts[1]:
+        return parts[1]
+    return "unknown"
+
+
+def _extension(key: str) -> str:
+    return os.path.splitext(key)[1].lower()

@@ -22,6 +22,19 @@ resource "aws_s3_bucket_versioning" "images_bucket" {
   }
 }
 
+# CORS configuration for browser uploads
+resource "aws_s3_bucket_cors_configuration" "images_bucket" {
+  bucket = aws_s3_bucket.images_bucket.id
+
+  cors_rule {
+    allowed_headers = ["*"]
+    allowed_methods = ["GET", "PUT", "POST", "DELETE", "HEAD"]
+    allowed_origins = ["*"]
+    expose_headers  = ["ETag", "x-amz-server-side-encryption", "x-amz-request-id"]
+    max_age_seconds = 3000
+  }
+}
+
 # Block public access for security
 resource "aws_s3_bucket_public_access_block" "images_bucket" {
   bucket = aws_s3_bucket.images_bucket.id

@@ -6,20 +6,19 @@ function ImageUpload({ onUploadSuccess }) {
   const [selectedFile, setSelectedFile] = useState(null);
   const [preview, setPreview] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [processing, setProcessing] = useState(false);
   const [uploadStatus, setUploadStatus] = useState('');
   const [error, setError] = useState('');
 
   const handleFileSelect = (event) => {
     const file = event.target.files[0];
     if (file) {
-      // Validate file type
       const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/bmp', 'image/webp'];
       if (!validTypes.includes(file.type)) {
         setError('Please select a valid image file (JPEG, PNG, GIF, BMP, WEBP)');
         return;
       }
 
-      // Validate file size (max 10MB)
       if (file.size > 10 * 1024 * 1024) {
         setError('File size must be less than 10MB');
         return;
@@ -28,13 +27,49 @@ function ImageUpload({ onUploadSuccess }) {
       setSelectedFile(file);
       setError('');
 
-      // Create preview
       const reader = new FileReader();
       reader.onloadend = () => {
         setPreview(reader.result);
       };
       reader.readAsDataURL(file);
     }
+  };
+
+  // Updated polling function with better error handling
+  const pollForResults = async (imageId, maxAttempts = 30) => {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        console.log(`Polling attempt ${attempt + 1}/${maxAttempts} for image ${imageId}`);
+        const results = await api.getAnalysisResults(imageId);
+        
+        // Check if we have valid results
+        if (results && (results.status === 'completed' || results.labels || results.faces)) {
+          console.log('Analysis completed:', results);
+          return results;
+        }
+        
+        // Wait before next attempt
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      } catch (error) {
+        const statusCode = error.response?.status;
+        const errorMessage = error.message || '';
+        
+        // These errors mean "not ready yet", keep polling
+        if (statusCode === 404 || 
+            errorMessage.includes('not found') || 
+            errorMessage.includes('Failed to fetch')) {
+          console.log(`Results not ready (attempt ${attempt + 1}), waiting...`);
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          continue;
+        }
+        
+        // Other errors are real problems
+        console.error('Error polling for results:', error);
+        throw error;
+      }
+    }
+    
+    throw new Error('Processing timeout - results not available after 60 seconds');
   };
 
   const handleUpload = async () => {
@@ -44,6 +79,7 @@ function ImageUpload({ onUploadSuccess }) {
     }
 
     setUploading(true);
+    setProcessing(false);
     setUploadStatus('Getting upload URL...');
     setError('');
 
@@ -53,27 +89,39 @@ function ImageUpload({ onUploadSuccess }) {
         selectedFile.name,
         selectedFile.type
       );
+      console.log('Got presigned URL for image:', imageId);
 
       // Step 2: Upload to S3
       setUploadStatus('Uploading image...');
       await api.uploadToS3(uploadUrl, selectedFile);
+      console.log('Upload complete');
 
-      // Step 3: Success
-      setUploadStatus('Upload successful! Analysis in progress...');
+      // Step 3: Wait for processing
+      setUploading(false);
+      setProcessing(true);
+      setUploadStatus('Processing with AWS Rekognition... (this may take 10-30 seconds)');
 
-      // Reset form
+      const results = await pollForResults(imageId);
+      
+      // Step 4: Success
+      setProcessing(false);
+      setUploadStatus('Analysis complete!');
+
+      // Reset form and notify parent
       setTimeout(() => {
         setSelectedFile(null);
         setPreview(null);
         setUploadStatus('');
         if (onUploadSuccess) {
-          onUploadSuccess(imageId);
+          onUploadSuccess(results);
         }
       }, 2000);
 
     } catch (err) {
-      setError('Upload failed: ' + (err.response?.data?.error || err.message));
+      console.error('Upload/Processing error:', err);
+      setError('Error: ' + (err.message || 'Upload failed'));
       setUploadStatus('');
+      setProcessing(false);
     } finally {
       setUploading(false);
     }
@@ -89,7 +137,7 @@ function ImageUpload({ onUploadSuccess }) {
           id="file-input"
           accept="image/jpeg,image/jpg,image/png,image/gif,image/bmp,image/webp"
           onChange={handleFileSelect}
-          disabled={uploading}
+          disabled={uploading || processing}
           className="file-input"
         />
 
@@ -105,10 +153,10 @@ function ImageUpload({ onUploadSuccess }) {
 
         <button
           onClick={handleUpload}
-          disabled={!selectedFile || uploading}
+          disabled={!selectedFile || uploading || processing}
           className="upload-button"
         >
-          {uploading ? 'Uploading...' : 'Upload & Analyze'}
+          {uploading ? 'Uploading...' : processing ? 'Processing...' : 'Upload & Analyze'}
         </button>
 
         {uploadStatus && (
