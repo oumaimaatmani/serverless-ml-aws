@@ -1,47 +1,35 @@
 # Terraform
 terraform/.terraform/
 terraform/terraform.tfstate*
-terraform/tfplan
 terraform/*.tfvars
-terraform/tf_outputs.json
 tf_outputs.json
 
 # Python
 __pycache__/
-*.pyc
-*.pyo
-.pytest_cache/
-.ruff_cache/
+*.py[cod]
+*.egg-info/
 
 # Node / Frontend
-node_modules/
-dist/
-build/
+frontend/node_modules/
+frontend/dist/
 *.log
-npm-debug.log*
 
-# Environment files
-frontend/.env
-frontend/.env.backup
-frontend/.env.local
+# Environment
 .env
+frontend/.env*
 
-# Archives and packages
+# Archives / Build Artifacts
 lambda_packages/
 *.zip
 
-# IDE
+# IDE / OS
 .vscode/
 .idea/
+.DS_Store
+Thumbs.db
 *.swp
-*.swo
-
-# Temporary files
-*.txt
-!requirements.txt
 *.bak
 *.backup
 
-# OS
-.DS_Store
-Thumbs.db
+# Coverage / Misc
+coverage/
